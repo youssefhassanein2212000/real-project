@@ -77,7 +77,7 @@ def detect_ramp_up_intervals(
 
     while i < len(data):
         above_setpoint = temp.iloc[i - 1] > setpoint.iloc[i - 1] + margin
-        dropping = temp_diff.iloc[i] <= -abs(drop_threshold)
+        dropping = temp_diff.iloc[i] <= -drop_threshold
         energy_active = energy.iloc[i] >= energy_threshold
 
         if above_setpoint and dropping and energy_active:
@@ -191,7 +191,6 @@ def train_duration_classifier(
     predictions = model.predict(X_val)
     f1 = f1_score(y_val, predictions)
     return model, f1
-
 
 
 class RampUpModelResult(TypedDict):

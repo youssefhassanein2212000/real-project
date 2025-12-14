@@ -141,6 +141,12 @@ def intervals_to_feature_frame(
         setpoint_start = float(segment[setpoint_col].iloc[0])
         temp_end = float(segment[temp_col].iloc[-1])
         energy_values = segment[energy_col].astype(float)
+        if len(energy_values) < 2:
+            energy_slope = 0.0
+        else:
+            energy_slope = (energy_values.iloc[-1] - energy_values.iloc[0]) / max(
+                interval.duration_minutes, 1.0
+            )
 
         rows.append(
             {
@@ -148,8 +154,7 @@ def intervals_to_feature_frame(
                 "temp_gap_start": temp_start - setpoint_start,
                 "temp_drop_rate": (temp_start - temp_end) / max(interval.duration_minutes, 1.0),
                 "mean_energy": energy_values.mean(),
-                "energy_slope": (energy_values.iloc[-1] - energy_values.iloc[0])
-                / max(interval.duration_minutes, 1.0),
+                "energy_slope": energy_slope,
             }
         )
 
@@ -178,9 +183,15 @@ def train_duration_classifier(
     X = events_df[feature_cols]
     y = events_df["target_long"]
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=test_size, stratify=y, random_state=random_state
-    )
+    stratify_labels = y
+    try:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=test_size, stratify=stratify_labels, random_state=random_state
+        )
+    except ValueError:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=test_size, stratify=None, random_state=random_state
+        )
 
     model = make_pipeline(
         StandardScaler(),

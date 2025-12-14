@@ -8,14 +8,14 @@ chilled water energy and off-coil air temperature to:
 """
 
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import Any, List, Mapping, Sequence, TypedDict
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 
@@ -162,7 +162,7 @@ def train_duration_classifier(
     duration_threshold: float = 20.0,
     test_size: float = 0.25,
     random_state: int = 0,
-) -> tuple:
+) -> tuple[Pipeline, float]:
     """Train a classifier that estimates whether ramp-up duration is long/short."""
 
     if events_df.empty:
@@ -193,15 +193,23 @@ def train_duration_classifier(
     return model, f1
 
 
+
+class RampUpModelResult(TypedDict):
+    intervals: List[RampUpInterval]
+    features: pd.DataFrame
+    model: Pipeline
+    f1: float
+
+
 def build_room5_ramp_up_model(
     df: pd.DataFrame,
     *,
     duration_threshold: float = 20.0,
-    detection_kwargs: dict | None = None,
-) -> dict:
+    detection_kwargs: Mapping[str, Any] | None = None,
+) -> RampUpModelResult:
     """End-to-end helper for Room 5 ramp-up modeling."""
 
-    detection_kwargs = detection_kwargs or {}
+    detection_kwargs = dict(detection_kwargs) if detection_kwargs else {}
     timestamp_col = detection_kwargs.get("timestamp_col", "timestamp")
     temp_col = detection_kwargs.get("temp_col", "offcoil_air_temp")
     setpoint_col = detection_kwargs.get("setpoint_col", "offcoil_temp_setpoint")

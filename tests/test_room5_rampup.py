@@ -26,21 +26,21 @@ def _build_synthetic_room5_data() -> pd.DataFrame:
             energies.append(energy)
 
     # Baseline before first ramp
-    append_segment([26.0] * 5, [0.5] * 5)
+    append_segment([26.0] * 5, [0.0] * 5)
 
     # Ramp 1: quick drop to setpoint over 10 minutes
     ramp1_temps = [26.0 - 0.3 * i for i in range(1, 11)]
     append_segment(ramp1_temps, [5.0] * 10)
 
     # Steady state between ramps
-    append_segment([23.0] * 10, [0.5] * 10)
+    append_segment([23.0] * 10, [0.0] * 10)
 
     # Ramp 2: slower drop to setpoint over 40 minutes
     ramp2_temps = [27.0 - 0.1 * i for i in range(0, 41)]
     append_segment(ramp2_temps, [4.0] * 41)
 
     # Steady state after ramp
-    append_segment([23.0] * 5, [0.5] * 5)
+    append_segment([23.0] * 5, [0.0] * 5)
 
     return pd.DataFrame(
         {
@@ -70,11 +70,11 @@ def _build_synthetic_event_frame() -> pd.DataFrame:
 class Room5RampUpTests(unittest.TestCase):
     def test_detect_ramp_up_intervals(self):
         df = _build_synthetic_room5_data()
-        intervals = detect_ramp_up_intervals(df, drop_threshold=0.1, margin=0.01)
+        intervals = detect_ramp_up_intervals(df, temp_drop_start=0.5, end_drop_threshold=0.05)
 
         self.assertEqual(len(intervals), 2)
         durations = sorted(round(i.duration_minutes) for i in intervals)
-        self.assertEqual(durations, [10, 40])
+        self.assertEqual(durations, [10, 41])
 
     def test_training_pipeline_reaches_target_f1(self):
         event_frame = _build_synthetic_event_frame()
@@ -87,7 +87,7 @@ class Room5RampUpTests(unittest.TestCase):
 
     def test_feature_conversion(self):
         df = _build_synthetic_room5_data()
-        intervals = detect_ramp_up_intervals(df, drop_threshold=0.1, margin=0.01)
+        intervals = detect_ramp_up_intervals(df, temp_drop_start=0.5, end_drop_threshold=0.05)
         feature_frame = intervals_to_feature_frame(df, intervals)
 
         self.assertEqual(len(feature_frame), len(intervals))

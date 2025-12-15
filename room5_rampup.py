@@ -50,16 +50,17 @@ def detect_ramp_up_intervals(
     temp_col: str = "offcoil_air_temp",
     setpoint_col: str = "offcoil_temp_setpoint",
     energy_col: str = "chilled_water_energy",
-    drop_threshold: float = 0.05,
-    margin: float = 0.05,
-    energy_quantile: float = 0.6,
+    temp_drop_start: float = 0.5,
+    end_drop_threshold: float = 0.05,
+    energy_min_active: float = 0.0,
     min_duration_minutes: float = 1.0,
 ) -> List[RampUpInterval]:
     """Detect ramp-up intervals for Room 5.
 
-    Start: when off-coil temperature begins to drop (negative delta) while
-    above setpoint and chilled water energy is active.
-    End: when off-coil temperature first reaches or goes below setpoint.
+    Start: when chilled water energy becomes active (> energy_min_active) OR when
+    off-coil temperature drops by more than temp_drop_start in one step.
+    End: when temperature drop slows (>= -end_drop_threshold) AND chilled water
+    energy is no longer active.
     """
 
     data = _prepare_room5_frame(df, timestamp_col, temp_col, setpoint_col, energy_col)
@@ -70,28 +71,37 @@ def detect_ramp_up_intervals(
     setpoint = data[setpoint_col].astype(float)
     energy = data[energy_col].astype(float)
     temp_diff = temp.diff().fillna(0.0)
+    step_minutes = (
+        data[timestamp_col].diff().dt.total_seconds().dropna().median() / 60.0
+        if len(data) > 1
+        else 1.0
+    )
+    if not np.isfinite(step_minutes) or step_minutes <= 0:
+        step_minutes = 1.0
 
-    energy_threshold = energy.quantile(energy_quantile)
     intervals: List[RampUpInterval] = []
     i = 1
 
     while i < len(data):
-        above_setpoint = temp.iloc[i - 1] > setpoint.iloc[i - 1] + margin
-        dropping = temp_diff.iloc[i] <= -drop_threshold
-        energy_active = energy.iloc[i] >= energy_threshold
+        dropping_start = temp_diff.iloc[i] <= -temp_drop_start
+        energy_active = energy.iloc[i] > energy_min_active
 
-        if above_setpoint and dropping and energy_active:
-            start_idx = i - 1
+        if energy_active or dropping_start:
+            start_idx = i
             end_idx = start_idx
-            while end_idx + 1 < len(data) and temp.iloc[end_idx + 1] > setpoint.iloc[end_idx + 1]:
-                end_idx += 1
-
-            if end_idx + 1 < len(data) and temp.iloc[end_idx + 1] <= setpoint.iloc[end_idx + 1]:
-                end_idx += 1
+            j = end_idx + 1
+            while j < len(data):
+                ongoing_drop = temp_diff.iloc[j] < -end_drop_threshold
+                energy_still_active = energy.iloc[j] > energy_min_active
+                if ongoing_drop or energy_still_active:
+                    end_idx = j
+                    j += 1
+                    continue
+                break
 
             duration_minutes = (
                 data[timestamp_col].iloc[end_idx] - data[timestamp_col].iloc[start_idx]
-            ).total_seconds() / 60.0
+            ).total_seconds() / 60.0 + step_minutes
 
             if duration_minutes >= min_duration_minutes:
                 intervals.append(

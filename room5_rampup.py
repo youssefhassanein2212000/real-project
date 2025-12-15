@@ -12,9 +12,11 @@ from typing import Any, List, Mapping, Sequence, TypedDict
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
+from sklearn.model_selection import LeaveOneOut, train_test_split
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -249,3 +251,183 @@ def build_room5_ramp_up_model(
     )
 
     return {"intervals": intervals, "features": feature_frame, "model": model, "f1": f1}
+
+
+# --- Alternative duration regression workflow (Room 5) ---
+
+
+def detect_ramp_up_intervals_room5(
+    df: pd.DataFrame,
+    *,
+    timestamp_col: str = "timestamp",
+    temp_col: str = "offcoil_air_temp",
+    setpoint_col: str = "offcoil_temp_setpoint",
+    energy_col: str = "chilled_water_energy",
+    drop_threshold: float = 0.5,
+    max_gap: int = 2,
+    require_chw: bool = False,
+) -> tuple[pd.Series, list[tuple[int, int, float]]]:
+    """Detect ramp-up intervals using setpoint-relative drops."""
+
+    data = _prepare_room5_frame(df, timestamp_col, temp_col, setpoint_col, energy_col)
+    if data.empty or len(data) < 2:
+        return pd.Series(dtype=int), []
+
+    ts = pd.to_datetime(data[timestamp_col])
+    temp = data[temp_col].astype(float)
+    setp = data[setpoint_col].astype(float)
+    energy = data[energy_col].astype(float) if require_chw else None
+
+    slope = temp.diff()
+    labels = pd.Series(0, index=data.index, dtype=int)
+    intervals: list[tuple[int, int, float]] = []
+
+    i, n = 1, len(data)
+    while i < n:
+        start_cond = slope.iloc[i] < -drop_threshold and temp.iloc[i - 1] > setp.iloc[i - 1]
+        if require_chw:
+            start_cond = start_cond and energy.iloc[i] > 0
+        if start_cond:
+            start = i - 1
+            gap = 0
+            j = i
+            while j < n:
+                if require_chw and energy.iloc[j] <= 0:
+                    i = j + 1
+                    break
+                if temp.iloc[j] <= setp.iloc[j]:
+                    end = j
+                    labels.loc[start:end] = 1
+                    duration = (ts.iloc[end] - ts.iloc[start]).total_seconds() / 60.0
+                    intervals.append((start, end, duration))
+                    i = end + 1
+                    break
+                if slope.iloc[j] >= -drop_threshold:
+                    gap += 1
+                    if gap > max_gap:
+                        i = j + 1
+                        break
+                else:
+                    gap = 0
+                j += 1
+            else:
+                i = n
+        else:
+            i += 1
+    return labels, intervals
+
+
+def keep_first_ramp_per_day_intervals(
+    intervals: Sequence[tuple[int, int, float]],
+    timestamps: Sequence[Any],
+) -> list[tuple[int, int, float]]:
+    """Keep only the first detected ramp interval per calendar day."""
+
+    if not intervals:
+        return []
+    dates = pd.to_datetime(pd.Series(timestamps)).dt.date
+    kept: list[tuple[int, int, float]] = []
+    seen: set[Any] = set()
+    for start, end, dur in intervals:
+        day = dates.iloc[start]
+        if day in seen:
+            continue
+        kept.append((start, end, dur))
+        seen.add(day)
+    return kept
+
+
+def build_ramp_events_df(
+    df: pd.DataFrame,
+    intervals: Sequence[tuple[int, int, float]],
+    *,
+    timestamp_col: str = "timestamp",
+    temp_col: str = "offcoil_air_temp",
+    setpoint_col: str = "offcoil_temp_setpoint",
+) -> pd.DataFrame:
+    """Create one row per ramp event with summary features."""
+
+    if not intervals:
+        return pd.DataFrame(
+            columns=[
+                "day",
+                "duration_min",
+                "start_hour",
+                "start_temp",
+                "end_temp",
+                "gap_start",
+                "gap_end",
+                "min_temp",
+                "min_gap",
+                "mean_slope",
+                "min_slope",
+            ]
+        )
+
+    ts = pd.to_datetime(df[timestamp_col])
+    temp = df[temp_col].astype(float)
+    setp = df[setpoint_col].astype(float)
+
+    rows = []
+    for start, end, dur in intervals:
+        start_t = ts.iloc[start]
+        end_t = ts.iloc[end]
+        segment_temp = temp.iloc[start : end + 1]
+        segment_setp = setp.iloc[start : end + 1]
+        min_idx = int(np.argmin(segment_temp.values))
+        min_temp = float(segment_temp.iloc[min_idx])
+        min_gap = float(min_temp - segment_setp.iloc[min_idx])
+        rows.append(
+            {
+                "day": start_t.date(),
+                "duration_min": dur,
+                "start_hour": start_t.hour + start_t.minute / 60.0,
+                "start_temp": float(segment_temp.iloc[0]),
+                "end_temp": float(segment_temp.iloc[-1]),
+                "gap_start": float(segment_temp.iloc[0] - segment_setp.iloc[0]),
+                "gap_end": float(segment_temp.iloc[-1] - segment_setp.iloc[-1]),
+                "min_temp": min_temp,
+                "min_gap": min_gap,
+                "mean_slope": float(segment_temp.diff().dropna().mean()),
+                "min_slope": float(segment_temp.diff().dropna().min()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def ramp_duration_lodo_cv(
+    df_events: pd.DataFrame,
+) -> tuple[list[float], list[float], float, float]:
+    """Leave-one-day-out CV for ramp duration prediction."""
+
+    if df_events.empty or df_events["day"].nunique() < 2:
+        return [], [], float("nan"), float("nan")
+
+    X_cols = [c for c in df_events.columns if c not in ["duration_min", "day"]]
+    X = df_events[X_cols].values
+    y = df_events["duration_min"].values
+    loo = LeaveOneOut()
+    preds: list[float] = []
+    truths: list[float] = []
+    for train_idx, test_idx in loo.split(X):
+        model = GradientBoostingRegressor(random_state=42)
+        model.fit(X[train_idx], y[train_idx])
+        yhat = float(model.predict(X[test_idx])[0])
+        preds.append(yhat)
+        truths.append(float(y[test_idx][0]))
+    mae = mean_absolute_error(truths, preds)
+    med_ae = float(np.median(np.abs(np.array(truths) - np.array(preds))))
+    return preds, truths, mae, med_ae
+
+
+def train_duration_model(df_events: pd.DataFrame) -> tuple[GradientBoostingRegressor, list[str]]:
+    """Train final duration regressor on all ramp events."""
+
+    if df_events.empty:
+        raise ValueError("No ramp events to train on.")
+    X_cols = [c for c in df_events.columns if c not in ["duration_min", "day"]]
+    X = df_events[X_cols].values
+    y = df_events["duration_min"].values
+    model = GradientBoostingRegressor(random_state=42)
+    model.fit(X, y)
+    return model, X_cols

@@ -1,11 +1,17 @@
 import unittest
 
+import numpy as np
 import pandas as pd
 
 from room5_rampup import (
     detect_ramp_up_intervals,
     intervals_to_feature_frame,
     train_duration_classifier,
+    detect_ramp_up_intervals_room5,
+    keep_first_ramp_per_day_intervals,
+    build_ramp_events_df,
+    ramp_duration_lodo_cv,
+    train_duration_model,
 )
 
 
@@ -52,6 +58,32 @@ def _build_synthetic_room5_data() -> pd.DataFrame:
     )
 
 
+def _build_multiday_room5_data() -> pd.DataFrame:
+    rows = []
+    ts = pd.Timestamp("2024-01-01 00:00:00")
+
+    def add_ramp(day_offset: int, start_hour: int, temps: list[float]):
+        nonlocal ts
+        base = pd.Timestamp("2024-01-01") + pd.Timedelta(days=day_offset, hours=start_hour)
+        for i, t in enumerate(temps):
+            rows.append(
+                {
+                    "timestamp": base + pd.Timedelta(minutes=i),
+                    "offcoil_air_temp": t,
+                    "offcoil_temp_setpoint": 23.0,
+                    "chilled_water_energy": 1.0,
+                }
+            )
+
+    # Day 1 two ramps; only first should be kept
+    add_ramp(0, 6, [26.0, 25.3, 24.5, 23.0, 22.5])
+    add_ramp(0, 9, [25.0, 24.7, 24.0, 23.0])
+
+    # Day 2 one ramp
+    add_ramp(1, 6, [26.5, 25.8, 25.0, 23.0, 22.8])
+    return pd.DataFrame(rows)
+
+
 def _build_synthetic_event_frame() -> pd.DataFrame:
     # Four short events and four long events with separable features
     rows = [
@@ -92,6 +124,29 @@ class Room5RampUpTests(unittest.TestCase):
 
         self.assertEqual(len(feature_frame), len(intervals))
         self.assertTrue({"duration_minutes", "mean_energy"}.issubset(feature_frame.columns))
+
+    def test_new_detection_and_first_per_day(self):
+        df = _build_multiday_room5_data()
+        labels, intervals = detect_ramp_up_intervals_room5(df)
+        self.assertGreaterEqual(len(intervals), 2)
+        kept = keep_first_ramp_per_day_intervals(intervals, df["timestamp"])
+        self.assertEqual(len(kept), 2)
+        # Ensure labels mark ramp portions
+        self.assertTrue(labels.sum() > 0)
+
+    def test_event_frame_and_loocv(self):
+        df = _build_multiday_room5_data()
+        _, intervals = detect_ramp_up_intervals_room5(df)
+        kept = keep_first_ramp_per_day_intervals(intervals, df["timestamp"])
+        events = build_ramp_events_df(df, kept)
+        self.assertEqual(len(events), 2)
+        preds, truths, mae, med_ae = ramp_duration_lodo_cv(events)
+        self.assertEqual(len(preds), len(truths))
+        self.assertTrue(all(p >= 0 for p in preds))
+        self.assertTrue(mae >= 0 or np.isnan(mae))
+        model, cols = train_duration_model(events)
+        self.assertIsNotNone(model)
+        self.assertGreater(len(cols), 0)
 
 
 if __name__ == "__main__":

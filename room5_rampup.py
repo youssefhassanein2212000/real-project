@@ -16,7 +16,7 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
 from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import LeaveOneOut, train_test_split
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -400,21 +400,34 @@ def ramp_duration_lodo_cv(
 ) -> tuple[list[float], list[float], float, float]:
     """Leave-one-day-out CV for ramp duration prediction."""
 
-    if df_events.empty or df_events["day"].nunique() < 2:
+    unique_days = df_events["day"].unique() if not df_events.empty else []
+    if len(unique_days) < 2:
         return [], [], float("nan"), float("nan")
 
     X_cols = [c for c in df_events.columns if c not in ["duration_min", "day"]]
-    X = df_events[X_cols].values
-    y = df_events["duration_min"].values
-    loo = LeaveOneOut()
     preds: list[float] = []
     truths: list[float] = []
-    for train_idx, test_idx in loo.split(X):
+
+    for holdout_day in unique_days:
+        train_mask = df_events["day"] != holdout_day
+        test_mask = ~train_mask
+        X_train = df_events.loc[train_mask, X_cols].values
+        y_train = df_events.loc[train_mask, "duration_min"].values
+        X_test = df_events.loc[test_mask, X_cols].values
+        y_test = df_events.loc[test_mask, "duration_min"].values
+
+        if len(X_train) == 0 or len(X_test) == 0:
+            continue
+
         model = GradientBoostingRegressor(random_state=42)
-        model.fit(X[train_idx], y[train_idx])
-        yhat = float(model.predict(X[test_idx])[0])
-        preds.append(yhat)
-        truths.append(float(y[test_idx][0]))
+        model.fit(X_train, y_train)
+        yhat = model.predict(X_test)
+        preds.extend([float(v) for v in yhat])
+        truths.extend([float(v) for v in y_test])
+
+    if not preds:
+        return [], [], float("nan"), float("nan")
+
     mae = mean_absolute_error(truths, preds)
     med_ae = float(np.median(np.abs(np.array(truths) - np.array(preds))))
     return preds, truths, mae, med_ae

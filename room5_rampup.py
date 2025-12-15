@@ -374,7 +374,7 @@ def build_ramp_events_df(
         end_t = ts.iloc[end]
         segment_temp = temp.iloc[start : end + 1]
         segment_setp = setp.iloc[start : end + 1]
-        min_idx = int(np.argmin(segment_temp.values))
+        min_idx = np.argmin(segment_temp.values)
         min_temp = float(segment_temp.iloc[min_idx])
         min_gap = float(min_temp - segment_setp.iloc[min_idx])
         rows.append(
@@ -419,7 +419,7 @@ def ramp_duration_lodo_cv(
         if len(X_train) == 0 or len(X_test) == 0:
             continue
 
-        model = GradientBoostingRegressor(random_state=42)
+        model = _make_gbr_model()
         model.fit(X_train, y_train)
         yhat = model.predict(X_test)
         preds.extend([float(v) for v in yhat])
@@ -441,6 +441,10 @@ def train_duration_model(df_events: pd.DataFrame) -> tuple[GradientBoostingRegre
     X_cols = [c for c in df_events.columns if c not in ["duration_min", "day"]]
     X = df_events[X_cols].values
     y = df_events["duration_min"].values
-    model = GradientBoostingRegressor(random_state=42)
+    model = _make_gbr_model()
     model.fit(X, y)
     return model, X_cols
+
+
+def _make_gbr_model() -> GradientBoostingRegressor:
+    return GradientBoostingRegressor(random_state=42)

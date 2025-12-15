@@ -284,7 +284,8 @@ def detect_ramp_up_intervals_room5(
 
     i, n = 1, len(data)
     while i < n:
-        start_cond = slope.iloc[i] < -drop_threshold and temp.iloc[i - 1] > setp.iloc[i - 1]
+        prev_idx = i - 1
+        start_cond = slope.iloc[i] < -drop_threshold and temp.iloc[prev_idx] > setp.iloc[prev_idx]
         if require_chw:
             start_cond = start_cond and energy.iloc[i] > 0
         if start_cond:
@@ -374,6 +375,11 @@ def build_ramp_events_df(
         end_t = ts.iloc[end]
         segment_temp = temp.iloc[start : end + 1]
         segment_setp = setp.iloc[start : end + 1]
+        min_len = min(len(segment_temp), len(segment_setp))
+        if min_len == 0:
+            continue
+        segment_temp = segment_temp.iloc[:min_len]
+        segment_setp = segment_setp.iloc[:min_len]
         min_idx = np.argmin(segment_temp.values)
         min_temp = float(segment_temp.iloc[min_idx])
         min_gap = float(min_temp - segment_setp.iloc[min_idx])
@@ -447,4 +453,9 @@ def train_duration_model(df_events: pd.DataFrame) -> tuple[GradientBoostingRegre
 
 
 def _make_gbr_model() -> GradientBoostingRegressor:
-    return GradientBoostingRegressor(random_state=42)
+    return GradientBoostingRegressor(
+        random_state=42,
+        n_estimators=200,
+        learning_rate=0.05,
+        max_depth=3,
+    )

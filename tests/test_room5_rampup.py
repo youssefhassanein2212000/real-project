@@ -128,7 +128,7 @@ class Room5RampUpTests(unittest.TestCase):
     def test_new_detection_and_first_per_day(self):
         df = _build_multiday_room5_data()
         labels, intervals = detect_ramp_up_intervals_room5(df)
-        self.assertGreaterEqual(len(intervals), 2)
+        self.assertEqual(len(intervals), 3)
         kept = keep_first_ramp_per_day_intervals(intervals, df["timestamp"])
         self.assertEqual(len(kept), 2)
         # Ensure labels mark ramp portions

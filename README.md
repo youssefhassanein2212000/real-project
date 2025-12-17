@@ -17,17 +17,26 @@ from room5_rampup import (
 )
 
 df = pd.read_csv("ROBOD/combined_Room5_imputed.csv")
-results = build_room5_ramp_up_model(
-    df,
-    duration_threshold=20.0,  # classify long vs short ramp-up durations
-    detection_kwargs={
-        "drop_threshold": 0.05,
-        "margin": 0.05,
-    },
+# Classification helper (long/short)
+results = build_room5_ramp_up_model(df, duration_threshold=20.0)
+print("Detected intervals:", len(results["intervals"]))  # multiple ramps per day supported
+print("Validation F1-score:", results["f1"])
+
+# Optional: duration regression + per-day filtering
+from room5_rampup import (
+    detect_ramp_up_intervals_room5,
+    keep_first_ramp_per_day_intervals,
+    build_ramp_events_df,
+    ramp_duration_lodo_cv,
+    train_duration_model,
 )
 
-print("Detected intervals:", len(results["intervals"]))
-print("Validation F1-score:", results["f1"])
+labels, intervals = detect_ramp_up_intervals_room5(df, drop_threshold=0.5, max_gap=2, require_chw=False)
+# keep_first_ramp_per_day_intervals is optional; omit it to allow multiple ramps per day
+intervals = keep_first_ramp_per_day_intervals(intervals, df["timestamp"])
+events = build_ramp_events_df(df, intervals)
+preds, truths, mae, med_ae = ramp_duration_lodo_cv(events)
+duration_model, duration_features = train_duration_model(events)
 ```
 
 ## Tests
